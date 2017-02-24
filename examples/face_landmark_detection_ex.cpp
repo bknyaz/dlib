@@ -41,9 +41,10 @@
 #include <dlib/image_processing/frontal_face_detector.h>
 #include <dlib/image_processing/render_face_detections.h>
 #include <dlib/image_processing.h>
-#include <dlib/gui_widgets.h>
 #include <dlib/image_io.h>
 #include <iostream>
+#include <dirent.h>
+#include <string>
 
 using namespace dlib;
 using namespace std;
@@ -58,10 +59,10 @@ int main(int argc, char** argv)
         // process.  We will take these filenames in as command line arguments.
         // Dlib comes with example images in the examples/faces folder so give
         // those as arguments to this program.
-        if (argc == 1)
+        if (argc < 6)
         {
             cout << "Call this program like this:" << endl;
-            cout << "./face_landmark_detection_ex shape_predictor_68_face_landmarks.dat faces/*.jpg" << endl;
+            cout << "./face_landmark_detection_ex shape_predictor_68_face_landmarks.dat faces_dir faces_dir_dlib faces_dir_dlib_no_align HEIGHT" << endl;
             cout << "\nYou can get the shape_predictor_68_face_landmarks.dat file from:\n";
             cout << "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" << endl;
             return 0;
@@ -76,52 +77,101 @@ int main(int argc, char** argv)
         // as a command line argument.
         shape_predictor sp;
         deserialize(argv[1]) >> sp;
-
-
-        image_window win, win_faces;
-        // Loop over all the images provided on the command line.
-        for (int i = 2; i < argc; ++i)
+        
+        // check output directories
+        DIR *out_dir;
+        if ((out_dir = opendir(argv[3])) != NULL)
         {
-            cout << "processing image " << argv[i] << endl;
-            array2d<rgb_pixel> img;
-            load_image(img, argv[i]);
-            // Make the image larger so we can detect small faces.
-            pyramid_up(img);
-
-            // Now tell the face detector to give us a list of bounding boxes
-            // around all the faces in the image.
-            std::vector<rectangle> dets = detector(img);
-            cout << "Number of faces detected: " << dets.size() << endl;
-
-            // Now we will go ask the shape_predictor to tell us the pose of
-            // each face we detected.
-            std::vector<full_object_detection> shapes;
-            for (unsigned long j = 0; j < dets.size(); ++j)
-            {
-                full_object_detection shape = sp(img, dets[j]);
-                cout << "number of parts: "<< shape.num_parts() << endl;
-                cout << "pixel position of first part:  " << shape.part(0) << endl;
-                cout << "pixel position of second part: " << shape.part(1) << endl;
-                // You get the idea, you can get all the face part locations if
-                // you want them.  Here we just store them in shapes so we can
-                // put them on the screen.
-                shapes.push_back(shape);
-            }
-
-            // Now let's view our face poses on the screen.
-            win.clear_overlay();
-            win.set_image(img);
-            win.add_overlay(render_face_detections(shapes));
-
-            // We can also extract copies of each face that are cropped, rotated upright,
-            // and scaled to a standard size as shown here:
-            dlib::array<array2d<rgb_pixel> > face_chips;
-            extract_image_chips(img, get_face_chip_details(shapes), face_chips);
-            win_faces.set_image(tile_images(face_chips));
-
-            cout << "Hit enter to process the next image..." << endl;
-            cin.get();
+            closedir(out_dir);
         }
+        else
+        {
+            throw std::invalid_argument(string("not able to read the directory: ") + argv[3]);
+        }
+        if ((out_dir = opendir(argv[4])) != NULL)
+        {
+            closedir(out_dir);
+        }
+        else
+        {
+            throw std::invalid_argument(string("not able to read the directory: ") + argv[4]);
+        }
+        bool align = 1; // bool align = strcasecmp(argv[4],"true") == 0;
+        double height = strtod(argv[5], NULL);
+        // Loop over all the images provided on the command line.
+	    DIR *dir;
+	    struct dirent *ent;
+	    if ((dir = opendir(argv[2])) != NULL) 
+	    {
+	        while ((ent = readdir(dir)) != NULL) 
+	        {
+	            std::string input_file = argv[2]+string("/")+ent->d_name;
+                cout << "processing image " << input_file << endl;
+                std::string output_file = argv[3]+string("/")+ent->d_name;
+                std::string output_file_no_align = argv[4]+string("/")+ent->d_name;
+	            if (access( output_file.c_str(), F_OK ) != -1 && access( output_file_no_align.c_str(), F_OK ) != -1)
+	            {
+                    cout << "skipped " << endl;
+		            continue;	
+	            }
+	            try 
+	            {
+	                array2d<rgb_pixel> original;
+		            load_image(original, input_file.c_str());
+		            array2d<rgb_pixel> img;
+                    if (num_rows(original) > height)
+                    {
+    		            set_image_size(img, height, height/num_rows(original)*num_columns(original));
+            		    resize_image(original, img);
+                    }
+                    else
+                    {
+                        assign_image(img, original);
+                    }
+		            
+		            // Now tell the face detector to give us a list of bounding boxes
+		            // around all the faces in the image.
+		            std::vector<rectangle> dets = detector(img);
+		            cout << "Number of faces detected: " << dets.size() << endl;
+
+		            dlib::rectangle r = dets[0];
+                    
+		            cout << "Saving " << output_file << "; " << output_file_no_align << endl;
+                    auto out_img = sub_image(img, r);
+                    save_jpeg(out_img, output_file_no_align.c_str(), 90);
+                    if (align)
+                    {   
+                        // Now we will go ask the shape_predictor to tell us the pose of
+		                // each face we detected.
+		                std::vector<full_object_detection> shapes;
+                        full_object_detection shape = sp(img, r);
+	                    cout << "number of parts: "<< shape.num_parts() << endl;
+	                    cout << "pixel position of first part:  " << shape.part(0) << endl;
+	                    cout << "pixel position of second part: " << shape.part(1) << endl;
+                        cout << "bbox: "<< r << endl;
+                        // You get the idea, you can get all the face part locations if
+	                    // you want them.  Here we just store them in shapes so we can
+	                    // put them on the screen.
+	                    shapes.push_back(shape);
+
+	                    // We can also extract copies of each face that are cropped, rotated upright,
+		                // and scaled to a standard size as shown here:
+		                dlib::array<array2d<rgb_pixel> > face_chips;
+		                extract_image_chips(img, get_face_chip_details(shapes), face_chips);
+                	    save_jpeg(tile_images(face_chips), output_file.c_str(), 90);
+                    }
+	            } 
+	            catch (exception& e) 
+	            {
+		            cout << e.what() << endl;
+	            }
+            }
+	        closedir(dir);
+	    }
+        else
+        {
+            throw std::invalid_argument(string("not able to read the directory: ") + argv[2]);
+	    }
     }
     catch (exception& e)
     {
